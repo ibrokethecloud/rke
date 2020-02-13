@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	rkeData "github.com/rancher/kontainer-driver-metadata/rke/templates"
-	"github.com/rancher/rke/templates"
 	"os"
 	"os/exec"
 	"time"
+
+	rkeData "github.com/rancher/kontainer-driver-metadata/rke/templates"
+	"github.com/rancher/rke/templates"
+	v3 "github.com/rancher/types/apis/management.cattle.io/v3"
+	"sigs.k8s.io/yaml"
 
 	"io/ioutil"
 	"net/http"
@@ -20,9 +23,7 @@ import (
 	"github.com/rancher/rke/log"
 	"github.com/rancher/rke/services"
 	"github.com/rancher/rke/util"
-	"github.com/rancher/types/apis/management.cattle.io/v3"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -58,6 +59,8 @@ type ingressOptions struct {
 	AlpineImage       string
 	IngressImage      string
 	IngressBackend    string
+	HttpPort          string
+	HttpsPort         string
 }
 
 type MetricsServerOptions struct {
@@ -498,6 +501,8 @@ func (c *Cluster) deployIngress(ctx context.Context, data map[string]interface{}
 		ExtraEnvs:         c.Ingress.ExtraEnvs,
 		ExtraVolumes:      c.Ingress.ExtraVolumes,
 		ExtraVolumeMounts: c.Ingress.ExtraVolumeMounts,
+		HttpPort:          c.Ingress.HttpPort,
+		HttpsPort:         c.Ingress.HttpsPort,
 	}
 	// since nginx ingress controller 0.16.0, it can be run as non-root and doesn't require privileged anymore.
 	// So we can use securityContext instead of setting privileges via initContainer.
