@@ -3,27 +3,27 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	rkeData "github.com/rancher/kontainer-driver-metadata/rke/templates"
-	"github.com/rancher/rke/templates"
-	v3 "github.com/rancher/types/apis/management.cattle.io/v3"
-	"sigs.k8s.io/yaml"
-
-	"io/ioutil"
-	"net/http"
-	"strings"
-
 	"github.com/rancher/rke/addons"
 	"github.com/rancher/rke/authz"
 	"github.com/rancher/rke/k8s"
 	"github.com/rancher/rke/log"
 	"github.com/rancher/rke/services"
+	"github.com/rancher/rke/templates"
 	"github.com/rancher/rke/util"
+	"github.com/rancher/types/apis/management.cattle.io/v3"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
+	appsv1 "k8s.io/api/apps/v1"
 )
 
 const (
