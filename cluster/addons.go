@@ -22,8 +22,8 @@ import (
 	"github.com/rancher/rke/util"
 	"github.com/rancher/types/apis/management.cattle.io/v3"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
-	"sigs.k8s.io/yaml"
 )
 
 const (
