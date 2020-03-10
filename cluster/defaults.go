@@ -451,6 +451,7 @@ func (c *Cluster) setClusterImageDefaults() error {
 		&c.SystemImages.MetricsServer:             d(imageDefaults.MetricsServer, privRegURL),
 		// this's a stopgap, we could drop this after https://github.com/kubernetes/kubernetes/pull/75618 merged
 		&c.SystemImages.WindowsPodInfraContainer: d(imageDefaults.WindowsPodInfraContainer, privRegURL),
+		&c.SystemImages.HelmController:			   d(imageDefaults.HelmController, privRegURL),
 	}
 
 	for k, v := range systemImagesDefaultsMap {

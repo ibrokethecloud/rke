@@ -536,6 +536,9 @@ func ParseConfig(clusterFile string) (*v3.RancherKubernetesEngineConfig, error) 
 	if err := parseAddonConfig(clusterFile, &rkeConfig); err != nil {
 		return &rkeConfig, fmt.Errorf("error parsing addon config: %v", err)
 	}
+	if err := parseHelmControllerConfig(clusterFile, &rkeConfig); err != nil{
+		return &rkeConfig, fmt.Errorf("error parsing helm-controller config: %v", err)
+	}
 	return &rkeConfig, nil
 }
 
@@ -962,4 +965,28 @@ func IsLegacyKubeAPI(ctx context.Context, kubeCluster *Cluster) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func parseHelmControllerConfig(clusterFile string, rkeConfig *v3.RancherKubernetesEngineConfig) error {
+	if &rkeConfig.HelmController == nil {
+		return nil
+	}
+	var r map[string]interface{}
+	err := ghodssyaml.Unmarshal([]byte(clusterFile), &r)
+	if err != nil {
+		return fmt.Errorf("[parseHelmControllerConfig] error unmarshalling helm-controller config: %v", err)
+	}
+
+	if r["enabled"] != nil  {
+		switch r["scope"].(string) {
+		case "cluster":
+			return nil
+		case "namespace":
+			return nil
+		default:
+			return fmt.Errorf("[parseHelmControllerConfig] valid values for helm-controller scope are cluster or namespace")
+		}
+	}
+
+	return nil
 }

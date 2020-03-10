@@ -43,6 +43,9 @@ const (
 
 	CoreDNSProvider = "coredns"
 	KubeDNSProvider = "kube-dns"
+
+	HelmControllerAddonResourceName = "rke-helm-controller"
+	HelmControllerAddonJobName = "rke-helm-controller-deploy-job"
 )
 
 var DNSProviders = []string{KubeDNSProvider, CoreDNSProvider}
@@ -108,6 +111,11 @@ type addonError struct {
 	isCritical bool
 }
 
+type HelmControllerOptions struct {
+	Scope string
+	Image string
+}
+
 func (e *addonError) Error() string {
 	return e.err
 }
@@ -136,6 +144,14 @@ func (c *Cluster) deployK8sAddOns(ctx context.Context, data map[string]interface
 			return err
 		}
 		log.Warnf(ctx, "Failed to deploy addon execute job [%s]: %v", IngressAddonResourceName, err)
+
+	}
+
+	if err := c.deployHelmController(ctx, data); err != nil {
+		if err, ok := err.(*addonError); ok && err.isCritical {
+			return err
+		}
+		log.Warnf(ctx, "Failed to deploy addon execute job [%s]: %v", HelmControllerAddonResourceName, err)
 
 	}
 	return nil
@@ -607,4 +623,48 @@ func (c *Cluster) deployDNS(ctx context.Context, data map[string]interface{}) er
 		log.Warnf(ctx, "[dns] No valid DNS provider configured: %s", c.DNS.Provider)
 		return nil
 	}
+}
+
+func (c *Cluster) deployHelmController(ctx context.Context, data map[string]interface{}) error {
+	if c.HelmController.Scope == "none" {
+		addonJobExists, err := addons.AddonJobExists(HelmControllerAddonJobName, c.LocalKubeConfigPath, c.K8sWrapTransport)
+		if err != nil {
+			return nil
+		}
+		if addonJobExists {
+			log.Infof(ctx, "[helm] removing installed helm controller")
+			if err := c.doAddonDelete(ctx, HelmControllerAddonResourceName, false); err != nil {
+				return err
+			}
+
+			log.Infof(ctx, "[helm] helm controller removed successfully")
+		} else {
+			log.Infof(ctx, "[helm] helm controller is disabled, skipping helm controller")
+		}
+		return nil
+	}
+
+	log.Infof(ctx, "[helm] Deploying helm controller with scope %s", c.HelmController.Scope)
+
+	helmConfig := HelmControllerOptions{
+		Scope: c.HelmController.Scope,
+		Image: c.SystemImages.HelmController,
+	}
+
+	tmplt, err := templates.GetVersionedTemplates(rkeData.HelmController, data, c.Version)
+	if err != nil {
+		return err
+	}
+	// Currently only deploying nginx ingress controller
+	helmControllerYaml, err := templates.CompileTemplateFromMap(tmplt, helmConfig)
+	if err != nil {
+		return err
+	}
+	if err := c.doAddonDeploy(ctx, helmControllerYaml, HelmControllerAddonResourceName, false); err != nil {
+		return err
+	}
+
+	log.Infof(ctx, "[helm] helm controller deployed successfully")
+
+	return err
 }
