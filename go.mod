@@ -4,6 +4,8 @@ go 1.12
 
 replace (
 	github.com/knative/pkg => github.com/rancher/pkg v0.0.0-20190514055449-b30ab9de040e
+	github.com/rancher/kontainer-driver-metadata => ../../ibrokethecloud/kontainer-driver-metadata
+	github.com/rancher/types => ../types
 	k8s.io/client-go => k8s.io/client-go v0.17.2
 )
 
@@ -30,13 +32,17 @@ require (
 	github.com/rancher/kontainer-driver-metadata v0.0.0-20200218183853-2f58a2f30054
 	github.com/rancher/norman v0.0.0-20200211155126-fc45a55d4dfd
 	github.com/rancher/types v0.0.0-20200218191331-dc762fc27c91
+	github.com/sergi/go-diff v1.1.0 // indirect
 	github.com/sirupsen/logrus v1.4.2
 	github.com/smartystreets/goconvey v0.0.0-20190731233626-505e41936337 // indirect
 	github.com/stretchr/testify v1.4.0
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20190109142713-0ad062ec5ee5 // indirect
 	github.com/urfave/cli v1.20.0
-	golang.org/x/crypto v0.0.0-20190911031432-227b76d455e7
+	golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550
+	golang.org/x/mod v0.2.0 // indirect
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
+	golang.org/x/tools v0.0.0-20200220224806-8a925fa4c0df // indirect
+	golang.org/x/tools/gopls v0.3.0 // indirect
 	gopkg.in/ini.v1 v1.46.0 // indirect
 	gopkg.in/yaml.v2 v2.2.5
 	k8s.io/api v0.17.2
