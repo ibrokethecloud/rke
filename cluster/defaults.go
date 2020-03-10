@@ -65,6 +65,10 @@ const (
 	DefaultFlannelBackendVxLanPort = "8472"
 	DefaultFlannelBackendVxLanVNI  = "1"
 
+	DefaultCalicoFlexVolPluginDirectory = "/usr/libexec/kubernetes/kubelet-plugins/volume/exec/nodeagent~uds"
+
+	DefaultCanalFlexVolPluginDirectory = "/usr/libexec/kubernetes/kubelet-plugins/volume/exec/nodeagent~uds"
+
 	KubeAPIArgAdmissionControlConfigFile             = "admission-control-config-file"
 	DefaultKubeAPIArgAdmissionControlConfigFileValue = "/etc/kubernetes/admission.yaml"
 
@@ -79,10 +83,11 @@ const (
 	DefaultKubeAPIArgAuditLogPathValue    = "/var/log/kube-audit/audit-log.json"
 	DefaultKubeAPIArgAuditPolicyFileValue = "/etc/kubernetes/audit-policy.yaml"
 
-	DefaultMaxUnavailable            = "10%"
-	DefaultNodeDrainTimeout          = 120
-	DefaultNodeDrainGracePeriod      = -1
-	DefaultNodeDrainIgnoreDaemonsets = true
+	DefaultMaxUnavailableWorker       = "10%"
+	DefaultMaxUnavailableControlplane = "1"
+	DefaultNodeDrainTimeout           = 120
+	DefaultNodeDrainGracePeriod       = -1
+	DefaultNodeDrainIgnoreDaemonsets  = true
 )
 
 var (
@@ -220,13 +225,16 @@ func (c *Cluster) setClusterDefaults(ctx context.Context, flags ExternalFlags) e
 
 func (c *Cluster) setNodeUpgradeStrategy() {
 	if c.UpgradeStrategy == nil {
-		logrus.Info("No input provided for maxUnavailable, setting it to default value of 10%")
+		logrus.Debugf("No input provided for maxUnavailableWorker, setting it to default value of %v percent", strings.TrimRight(DefaultMaxUnavailableWorker, "%"))
+		logrus.Debugf("No input provided for maxUnavailableControlplane, setting it to default value of %v", DefaultMaxUnavailableControlplane)
 		c.UpgradeStrategy = &v3.NodeUpgradeStrategy{
-			MaxUnavailable: DefaultMaxUnavailable,
+			MaxUnavailableWorker:       DefaultMaxUnavailableWorker,
+			MaxUnavailableControlplane: DefaultMaxUnavailableControlplane,
 		}
 		return
 	}
-	setDefaultIfEmpty(&c.UpgradeStrategy.MaxUnavailable, DefaultMaxUnavailable)
+	setDefaultIfEmpty(&c.UpgradeStrategy.MaxUnavailableWorker, DefaultMaxUnavailableWorker)
+	setDefaultIfEmpty(&c.UpgradeStrategy.MaxUnavailableControlplane, DefaultMaxUnavailableControlplane)
 	if !c.UpgradeStrategy.Drain {
 		return
 	}
@@ -449,6 +457,7 @@ func (c *Cluster) setClusterImageDefaults() error {
 		&c.SystemImages.Ingress:                   d(imageDefaults.Ingress, privRegURL),
 		&c.SystemImages.IngressBackend:            d(imageDefaults.IngressBackend, privRegURL),
 		&c.SystemImages.MetricsServer:             d(imageDefaults.MetricsServer, privRegURL),
+		&c.SystemImages.Nodelocal:                 d(imageDefaults.Nodelocal, privRegURL),
 		// this's a stopgap, we could drop this after https://github.com/kubernetes/kubernetes/pull/75618 merged
 		&c.SystemImages.WindowsPodInfraContainer: d(imageDefaults.WindowsPodInfraContainer, privRegURL),
 		&c.SystemImages.HelmController:			   d(imageDefaults.HelmController, privRegURL),
@@ -499,7 +508,8 @@ func (c *Cluster) setClusterNetworkDefaults() {
 	switch c.Network.Plugin {
 	case CalicoNetworkPlugin:
 		networkPluginConfigDefaultsMap = map[string]string{
-			CalicoCloudProvider: DefaultNetworkCloudProvider,
+			CalicoCloudProvider:          DefaultNetworkCloudProvider,
+			CalicoFlexVolPluginDirectory: DefaultCalicoFlexVolPluginDirectory,
 		}
 	case FlannelNetworkPlugin:
 		networkPluginConfigDefaultsMap = map[string]string{
@@ -512,6 +522,7 @@ func (c *Cluster) setClusterNetworkDefaults() {
 			CanalFlannelBackendType:                 DefaultFlannelBackendVxLan,
 			CanalFlannelBackendPort:                 DefaultFlannelBackendVxLanPort,
 			CanalFlannelBackendVxLanNetworkIdentify: DefaultFlannelBackendVxLanVNI,
+			CanalFlexVolPluginDirectory:             DefaultCanalFlexVolPluginDirectory,
 		}
 	}
 	if c.Network.CalicoNetworkProvider != nil {
@@ -593,7 +604,7 @@ func GetExternalFlags(local, updateOnly, disablePortCheck bool, configDir, clust
 func (c *Cluster) setAddonsDefaults() {
 	c.Ingress.UpdateStrategy = setDaemonsetAddonDefaults(c.Ingress.UpdateStrategy)
 	c.Network.UpdateStrategy = setDaemonsetAddonDefaults(c.Network.UpdateStrategy)
-	c.DNS.UpdateStrategy = setDeploymentAddonDefaults(c.DNS.UpdateStrategy)
+	c.DNS.UpdateStrategy = setDNSDeploymentAddonDefaults(c.DNS.UpdateStrategy, c.DNS.Provider)
 	if c.DNS.LinearAutoscalerParams == nil {
 		c.DNS.LinearAutoscalerParams = &DefaultClusterProportionalAutoscalerLinearParams
 	}
@@ -626,5 +637,45 @@ func setDeploymentAddonDefaults(updateStrategy *appsv1.DeploymentStrategy) *apps
 	if updateStrategy.RollingUpdate.MaxSurge == nil {
 		updateStrategy.RollingUpdate.MaxSurge = &DefaultDeploymentUpdateStrategyParams
 	}
+	return updateStrategy
+}
+
+func setDNSDeploymentAddonDefaults(updateStrategy *appsv1.DeploymentStrategy, dnsProvider string) *appsv1.DeploymentStrategy {
+	var (
+		coreDNSMaxUnavailable, coreDNSMaxSurge = intstr.FromInt(1), intstr.FromInt(0)
+		kubeDNSMaxSurge, kubeDNSMaxUnavailable = intstr.FromString("10%"), intstr.FromInt(0)
+	)
+	if updateStrategy != nil && updateStrategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
+		return updateStrategy
+	}
+	switch dnsProvider {
+	case CoreDNSProvider:
+		if updateStrategy == nil || updateStrategy.RollingUpdate == nil {
+			return &appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxUnavailable: &coreDNSMaxUnavailable,
+					MaxSurge:       &coreDNSMaxSurge,
+				},
+			}
+		}
+		if updateStrategy.RollingUpdate.MaxUnavailable == nil {
+			updateStrategy.RollingUpdate.MaxUnavailable = &coreDNSMaxUnavailable
+		}
+	case KubeDNSProvider:
+		if updateStrategy == nil || updateStrategy.RollingUpdate == nil {
+			return &appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxUnavailable: &kubeDNSMaxUnavailable,
+					MaxSurge:       &kubeDNSMaxSurge,
+				},
+			}
+		}
+		if updateStrategy.RollingUpdate.MaxSurge == nil {
+			updateStrategy.RollingUpdate.MaxSurge = &kubeDNSMaxSurge
+		}
+	}
+
 	return updateStrategy
 }

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	rkeData "github.com/rancher/kontainer-driver-metadata/rke/templates"
 	"github.com/rancher/rke/addons"
 	"github.com/rancher/rke/authz"
 	"github.com/rancher/rke/k8s"
@@ -20,7 +19,8 @@ import (
 	"github.com/rancher/rke/services"
 	"github.com/rancher/rke/templates"
 	"github.com/rancher/rke/util"
-	"github.com/rancher/types/apis/management.cattle.io/v3"
+	v3 "github.com/rancher/types/apis/management.cattle.io/v3"
+	"github.com/rancher/types/kdm"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
@@ -46,6 +46,9 @@ const (
 
 	HelmControllerAddonResourceName = "rke-helm-controller"
 	HelmControllerAddonJobName = "rke-helm-controller-deploy-job"
+
+	Nodelocal       = "nodelocal"
+
 )
 
 var DNSProviders = []string{KubeDNSProvider, CoreDNSProvider}
@@ -104,6 +107,16 @@ type KubeDNSOptions struct {
 	NodeSelector           map[string]string
 	UpdateStrategy         *appsv1.DeploymentStrategy
 	LinearAutoscalerParams string
+}
+
+type NodelocalOptions struct {
+	RBACConfig       string
+	NodelocalImage   string
+	ClusterDomain    string
+	ClusterDNSServer string
+	IPAddress        string
+	NodeSelector     map[string]string
+	UpdateStrategy   *appsv1.DaemonSetUpdateStrategy
 }
 
 type addonError struct {
@@ -303,7 +316,7 @@ func (c *Cluster) deployKubeDNS(ctx context.Context, data map[string]interface{}
 		return err
 	}
 	KubeDNSConfig.LinearAutoscalerParams = string(linearModeBytes)
-	tmplt, err := templates.GetVersionedTemplates(rkeData.KubeDNS, data, c.Version)
+	tmplt, err := templates.GetVersionedTemplates(kdm.KubeDNS, data, c.Version)
 	if err != nil {
 		return err
 	}
@@ -336,7 +349,7 @@ func (c *Cluster) deployCoreDNS(ctx context.Context, data map[string]interface{}
 		return err
 	}
 	CoreDNSConfig.LinearAutoscalerParams = string(linearModeBytes)
-	tmplt, err := templates.GetVersionedTemplates(rkeData.CoreDNS, data, c.Version)
+	tmplt, err := templates.GetVersionedTemplates(kdm.CoreDNS, data, c.Version)
 	if err != nil {
 		return err
 	}
@@ -347,7 +360,7 @@ func (c *Cluster) deployCoreDNS(ctx context.Context, data map[string]interface{}
 	if err := c.doAddonDeploy(ctx, coreDNSYaml, getAddonResourceName(c.DNS.Provider), false); err != nil {
 		return err
 	}
-	log.Infof(ctx, "[addons] CoreDNS deployed successfully..")
+	log.Infof(ctx, "[addons] CoreDNS deployed successfully")
 	return nil
 }
 
@@ -382,7 +395,7 @@ func (c *Cluster) deployMetricServer(ctx context.Context, data map[string]interf
 		UpdateStrategy:     c.Monitoring.UpdateStrategy,
 		Replicas:           c.Monitoring.Replicas,
 	}
-	tmplt, err := templates.GetVersionedTemplates(rkeData.MetricsServer, data, c.Version)
+	tmplt, err := templates.GetVersionedTemplates(kdm.MetricsServer, data, c.Version)
 	if err != nil {
 		return err
 	}
@@ -551,7 +564,7 @@ func (c *Cluster) deployIngress(ctx context.Context, data map[string]interface{}
 			ingressConfig.AlpineImage = c.SystemImages.Alpine
 		}
 	}
-	tmplt, err := templates.GetVersionedTemplates(rkeData.NginxIngress, data, c.Version)
+	tmplt, err := templates.GetVersionedTemplates(kdm.NginxIngress, data, c.Version)
 	if err != nil {
 		return err
 	}
@@ -607,7 +620,6 @@ func (c *Cluster) deployDNS(ctx context.Context, data map[string]interface{}) er
 			log.Warnf(ctx, "Failed to deploy addon execute job [%s]: %v", getAddonResourceName(c.DNS.Provider), err)
 		}
 		log.Infof(ctx, "[dns] DNS provider %s deployed successfully", c.DNS.Provider)
-		return nil
 	case CoreDNSProvider:
 		if err := c.deployCoreDNS(ctx, data); err != nil {
 			if err, ok := err.(*addonError); ok && err.isCritical {
@@ -616,13 +628,64 @@ func (c *Cluster) deployDNS(ctx context.Context, data map[string]interface{}) er
 			log.Warnf(ctx, "Failed to deploy addon execute job [%s]: %v", getAddonResourceName(c.DNS.Provider), err)
 		}
 		log.Infof(ctx, "[dns] DNS provider %s deployed successfully", c.DNS.Provider)
-		return nil
 	case "none":
 		return nil
 	default:
 		log.Warnf(ctx, "[dns] No valid DNS provider configured: %s", c.DNS.Provider)
 		return nil
 	}
+	// Check for nodelocal DNS
+	if c.DNS.Nodelocal == nil {
+		AddonJobExists, err := addons.AddonJobExists(getAddonResourceName(Nodelocal)+"-deploy-job", c.LocalKubeConfigPath, c.K8sWrapTransport)
+		if err != nil {
+			return err
+		}
+		if AddonJobExists {
+			log.Infof(ctx, "[dns] removing %s", Nodelocal)
+			if err := c.doAddonDelete(ctx, getAddonResourceName(Nodelocal), false); err != nil {
+				return err
+			}
+
+			log.Infof(ctx, "[dns] %s removed successfully", Nodelocal)
+			return nil
+		}
+	}
+	if c.DNS.Nodelocal != nil && c.DNS.Nodelocal.IPAddress != "" {
+		if err := c.deployNodelocal(ctx, data); err != nil {
+			if err, ok := err.(*addonError); ok && err.isCritical {
+				return err
+			}
+			log.Warnf(ctx, "Failed to deploy addon execute job [%s]: %v", getAddonResourceName(Nodelocal), err)
+		}
+		return nil
+	}
+	return nil
+}
+
+func (c *Cluster) deployNodelocal(ctx context.Context, data map[string]interface{}) error {
+	log.Infof(ctx, "[dns] Setting up %s", Nodelocal)
+	NodelocalConfig := NodelocalOptions{
+		NodelocalImage:   c.SystemImages.Nodelocal,
+		RBACConfig:       c.Authorization.Mode,
+		ClusterDomain:    c.ClusterDomain,
+		ClusterDNSServer: c.ClusterDNSServer,
+		IPAddress:        c.DNS.Nodelocal.IPAddress,
+		NodeSelector:     c.DNS.Nodelocal.NodeSelector,
+		UpdateStrategy:   c.DNS.Nodelocal.UpdateStrategy,
+	}
+	tmplt, err := templates.GetVersionedTemplates(kdm.Nodelocal, data, c.Version)
+	if err != nil {
+		return err
+	}
+	nodelocalYaml, err := templates.CompileTemplateFromMap(tmplt, NodelocalConfig)
+	if err != nil {
+		return err
+	}
+	if err := c.doAddonDeploy(ctx, nodelocalYaml, getAddonResourceName(Nodelocal), false); err != nil {
+		return err
+	}
+	log.Infof(ctx, "[dns] %s deployed successfully", Nodelocal)
+	return nil
 }
 
 func (c *Cluster) deployHelmController(ctx context.Context, data map[string]interface{}) error {
